@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Read HWPX tables</title>
+    <style>
+        nav {
+            flex: 1;
+        }
+
+        article {
+            flex: 3;
+        }
+
+        header,
+        section {
+            display: flex;
+        }
+
+        .section-table {
+            height: 50vh;
+        }
+
+        .scroll-y {
+            overflow-y: scroll;
+        }
+
+        .border1 {
+            border: 1px solid black;
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        td {
+            padding: 3px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+
+    </header>
+
+    <section class="section-table">
+        <nav class="border2">
+            <input id="inputFiles" type="file" onchange="onChangeFile()" multiple="multiple" accept=".hwpx"
+                style="width: 100%; height: 100px; background-color: bisque;">
+            <!-- <br>
+            <button onclick="onChangeFile()">CCC</button> -->
+
+            <ul id="navFiles" style="background-color:FloralWhite">
+            </ul>
+        </nav>
+
+        <article class="scroll-y" style="padding: 1em; background-color: cornsilk;">
+            <array-table id="att"></array-table>
+        </article>
+    </section>
+
+    <hr>
+    
+    <section>
+        <nav class="border2">
+            <ul id="navCoords">
+            </ul>
+        </nav>
+
+        <article class="scroll-y">
+            <button id="btnDownloadCSV" style="display: none;" onclick="onClickDownloadCSV()">Download CSV</button>
+            <array-table-result id="atResult"></array-table-result>
+        </article>
+    </section>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+        integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+    <script src="ArrayTable.js"></script>
+
+    <script>
+        async function onChangeFile() {
+            const e = document.getElementById('inputFiles');
+
+            for (let i = 0; i < e.files.length; i++) {
+                const file = e.files[i];
+                if (!file.name.match(/\.hwpx$/i)) {
+                    console.log(`Invalid file name '${file.name}', should be .hwpx`);
+                    continue;
+                }
+
+                const parsed = await readHWPX(file);
+                if (parsed) {
+                    addNavFile(file, parsed);
+                }
+            }
+        }
+
+        function addNavFile(file, parsed) {
+            const ul = document.getElementById('navFiles');
+            const li = document.createElement('li');
+            li.textContent = `[${parsed.length}] ${file.name}`;
+
+            li.style.cursor = 'pointer';
+            li.addEventListener('click', (e) => {
+                refreshArticleFile(file, parsed);
+            });
+
+            // -- li has getDataSource function
+            li.getDataSource = () => {
+                return parsed;
+            }
+
+            li.getFile = () => {
+                return file;
+            }
+
+            ul.appendChild(li);
+        }
+
+        async function readHWPX(file) {
+            const s0 = await readHWPXSection0(file);
+            if (!s0) {
+                return undefined;
+            }
+
+            const dom = stringToDOM(s0);
+            const parsed = parseDOM(dom);
+            return parsed;
+        }
+
+        async function readHWPXSection0(file) {
+            try {
+                const zip = await JSZip.loadAsync(file);
+                const s0 = await zip.file('Contents/section0.xml').async('string');
+                return s0;
+            } catch (e) {
+                return undefined;
+            }
+        }
+
+        function stringToDOM(str) {
+            return new DOMParser().parseFromString(str, "text/xml");
+        }
+
+        function parseDOM(dom) {
+            const tables = dom.getElementsByTagName('hp:tbl');
+
+            if (0 === tables.length) {
+                return [];
+            }
+
+            const result = [];
+            for (let i = 0; i < tables.length; i++) {
+                const table = tables[i];
+
+                const r = domTable(table);
+                result.push(r);
+            }
+
+            return result;
+        }
+
+        function domTable(domTbl) {
+            const trs = domTbl.getElementsByTagName("hp:tr");
+
+            const result = [];
+            for (let i = 0; i < trs.length; ++i) {
+                const tr = trs[i];
+                const tds = tr.getElementsByTagName("hp:tc");
+
+                const line = [];
+                for (let j = 0; j < tds.length; ++j) {
+                    const td = tds[j];
+                    const cellAddr = td.getElementsByTagName("hp:cellAddr");
+                    if (cellAddr) {
+                        const row = cellAddr[0].getAttribute("rowAddr");
+                        const col = cellAddr[0].getAttribute("colAddr");
+                        line[col] = td.textContent;
+                    }
+                }
+                result.push(line);
+            }
+            return result;
+        }
+
+        function refreshArticleFile(file, parsed) {
+            const at = document.getElementById('att');
+            at.setDataSource(parsed);
+
+            // -- 'SELECT' new array table with coord, string to 2d array
+            arr = Array.from(coord).map(d => d.split(','));
+            at.selectArray(arr);
+        }
+
+        function initArrayTable() {
+            const at = document.getElementById('att');
+            at.setOnClickTD((e) => {
+                const td = e.target;
+
+                const selected = td.isSelected();
+
+                const tableIdx = td.getAttribute('data-table');
+                const row = td.getAttribute('data-row');
+                const col = td.getAttribute('data-col');
+                const contents = td.textContent;
+
+                if (selected) {
+                    addCoord(tableIdx, row, col, contents);
+                } else {
+                    removeCoord(tableIdx, row, col);
+                }
+            });
+        }
+
+        // -- COORD
+        function addCoord(table, row, col, contents) {
+            window.coord.add(`${table},${row},${col}`);
+
+            // -- create LI
+            const ul = document.getElementById('navCoords');
+            const li = document.createElement('li');
+            ul.appendChild(li);
+            li.textContent = `[${table},${row},${col}] ${contents.substring(0, 10)}`;
+            li.style.cursor = 'pointer';
+            li.setAttribute('id', `coord_${table},${row},${col}`);
+            li.addEventListener('click', (e) => {
+                if (!confirm(`Delete this?`)) {
+                    return;
+                }
+
+                const att = document.getElementById('att');
+                att.select(table, row, col, false);
+                removeCoord(table, row, col);
+            });
+
+            onChangeCoord();
+        }
+
+        function removeCoord(table, row, col) {
+            window.coord.delete(`${table},${row},${col}`);
+
+            // -- remove li
+            document.getElementById(`coord_${table},${row},${col}`).remove();
+
+            onChangeCoord();
+        }
+
+        function coordResult() {
+            const ul = document.getElementById('navFiles');
+            const lis = ul.getElementsByTagName('li');
+
+            const result = [];
+            for (let i = 0; i < lis.length; i++) {
+                const li = lis[i];
+                const ds = li.getDataSource();
+                const file = li.getFile();
+
+                // -- first result should be file name
+                const resultFile = [file.name];
+                for (const item of window.coord) {
+                    const coordIndex = item.split(','); // table, row, col order
+
+                    const idxTable = coordIndex[0];
+                    const idxRow = coordIndex[1];
+                    const idxCol = coordIndex[2];
+                    try {
+                        const value = ds[idxTable][idxRow][idxCol];
+                        resultFile.push(value);
+                    } catch (e) {
+                        resultFile.push(''); // empty if not exists
+                    }
+                }
+
+                result.push(resultFile);
+            }
+
+            return result;
+        }
+
+        function onChangeCoord() {
+            const result = coordResult();
+            const header = ['file'];
+
+            header.push(...Array.from(coord).map(d => `[${d}]`));
+
+            const allResult = [header, ...result];
+            document.getElementById('atResult').setDataSource(allResult);
+
+            // -- button show
+            document.getElementById('btnDownloadCSV').style.display = 'block';
+        }
+
+        function onClickDownloadCSV() {
+            const ds = document.getElementById('atResult').getDataSource();
+            saveBlob(json2blob(ds), 'result.csv');
+            console.log(ds);
+        }
+
+        function json2blob(jsonArray) {
+            const escapeString = function (str) {
+                return '"' + str.replaceAll('"', '""') + '"';
+            };
+
+            const escapeArray = function (array) {
+                return array.map(escapeString).join(",");
+            };
+
+            if (!jsonArray || 0 === jsonArray.length) {
+                return undefined;
+            }
+
+            // const csv = jsonArray.map(escapeString);
+            const body = jsonArray.map((d) => escapeArray(d)).join("\n");
+
+            const all = body;
+
+            const blob = new Blob(
+                [
+                    new Uint8Array([0xef, 0xbb, 0xbf]), // UTF-8 BOM
+                    all
+                ],
+                { type: "text/plain;charset=utf-8" }
+            );
+
+            return blob;
+        }
+
+        saveBlob = (function () {
+            var a = document.createElement("a");
+            document.body.appendChild(a);
+            a.style = "display: none";
+            return function (data, fileName) {
+                var url = window.URL.createObjectURL(data);
+                a.href = url;
+                a.download = fileName;
+                a.click();
+                window.URL.revokeObjectURL(url);
+            };
+        })();
+
+        (() => {
+            initArrayTable();
+            window.coord = new Set();
+        })()
+
+    </script>
+</body>
+
+</html>
